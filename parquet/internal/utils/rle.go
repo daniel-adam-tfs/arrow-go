@@ -281,6 +281,40 @@ func (r *RleDecoder) GetBatchLevels(values []int16, maxLevel int16) (int, int64,
 	return read, maxCount, nil
 }
 
+func (r *RleDecoder) Count(maxLevel int16, size int) (int, int64, error) {
+	read := 0
+	var maxCount int64
+	for read < size {
+		remain := size - read
+
+		if r.repCount > 0 {
+			repbatch := min(remain, int(r.repCount))
+			if r.curVal == uint64(maxLevel) {
+				maxCount += int64(repbatch)
+			}
+			r.repCount -= int32(repbatch)
+			read += repbatch
+		} else if r.litCount > 0 {
+			litbatch := min(remain, int(r.litCount))
+			n, count, err := r.r.CountBatchLevels(uint(r.bitWidth), litbatch, maxLevel)
+			if err != nil {
+				return read, maxCount, err
+			}
+			maxCount += count
+			r.litCount -= int32(litbatch)
+			read += n
+			if n != litbatch {
+				return read, maxCount, nil
+			}
+		} else {
+			if !r.Next() {
+				return read, maxCount, nil
+			}
+		}
+	}
+	return read, maxCount, nil
+}
+
 // GetBatchBitmap decodes one-bit values directly into a bitmap.
 func (r *RleDecoder) GetBatchBitmap(out []byte, outOffset, size int) (int, error) {
 	if r.bitWidth != 1 {

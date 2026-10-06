@@ -77,6 +77,7 @@ func encodeLevels(t *testing.T, enc parquet.Encoding, maxLvl int16, numLevels in
 func verifyDecodingLvls(t *testing.T, enc parquet.Encoding, maxLvl int16, input []int16, buf []byte) {
 	var (
 		decoder        encoding.LevelDecoder
+		countDecoder   encoding.LevelDecoder
 		lvlCount       = 0
 		numLevels      = len(input)
 		output         = make([]int16, numLevels)
@@ -87,6 +88,8 @@ func verifyDecodingLvls(t *testing.T, enc parquet.Encoding, maxLvl int16, input 
 	// decode levels and test with multiple decode calls
 	_, err := decoder.SetData(enc, maxLvl, numLevels, buf)
 	assert.NoError(t, err)
+	_, err = countDecoder.SetData(enc, maxLvl, numLevels, buf)
+	assert.NoError(t, err)
 	// try multiple decoding on a single setdata call
 	for ct := 0; ct < decodeCount; ct++ {
 		offset := ct * numInnerLevels
@@ -95,6 +98,10 @@ func verifyDecodingLvls(t *testing.T, enc parquet.Encoding, maxLvl int16, input 
 		assert.NoError(t, err)
 		assert.Equal(t, numInnerLevels, lvlCount)
 		assert.Equal(t, input[offset:offset+numInnerLevels], output[:numInnerLevels])
+		assert.EqualValues(t, countLevels(input[offset:offset+numInnerLevels], maxLvl), valsToRead)
+
+		_, valsToRead, err = countDecoder.Count(maxLvl, numInnerLevels)
+		assert.NoError(t, err)
 		assert.EqualValues(t, countLevels(input[offset:offset+numInnerLevels], maxLvl), valsToRead)
 	}
 
@@ -110,6 +117,10 @@ func verifyDecodingLvls(t *testing.T, enc parquet.Encoding, maxLvl int16, input 
 		assert.NoError(t, err)
 		assert.Equal(t, remaining, lvlCount)
 		assert.Equal(t, input[levelsCompleted:], output[:remaining])
+		assert.EqualValues(t, countLevels(input[levelsCompleted:], maxLvl), valsToRead)
+
+		_, valsToRead, err = countDecoder.Count(maxLvl, remaining)
+		assert.NoError(t, err)
 		assert.EqualValues(t, countLevels(input[levelsCompleted:], maxLvl), valsToRead)
 	}
 	// test decode zero values
@@ -201,6 +212,12 @@ func TestLevelDecoderPropagatesTruncatedRleLiteralRun(t *testing.T) {
 	assert.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	assert.Equal(t, 32, n)
 	assert.EqualValues(t, 32, valsToRead)
+
+	var countDecoder encoding.LevelDecoder
+	_, err = countDecoder.SetData(parquet.Encodings.RLE, 1, 64, data)
+	assert.NoError(t, err)
+	_, _, err = countDecoder.Count(1, 64)
+	assert.ErrorIs(t, err, io.ErrUnexpectedEOF)
 }
 
 func TestLevelsDecodeMultipleSetData(t *testing.T) {

@@ -174,7 +174,6 @@ type columnChunkReader struct {
 
 	// is set when an error is encountered
 	err          error
-	defLvlBuffer []int16
 	repLvlBuffer []int16
 
 	dictState dictionaryState
@@ -283,15 +282,6 @@ func (c *columnChunkReader) Close() error {
 		page.Release()
 	}
 	return nil
-}
-
-func (c *columnChunkReader) getDefLvlBuffer(sz int64) []int16 {
-	if int64(len(c.defLvlBuffer)) < sz {
-		c.defLvlBuffer = make([]int16, sz)
-		return c.defLvlBuffer
-	}
-
-	return c.defLvlBuffer[:sz]
 }
 
 func (c *columnChunkReader) getRepLvlBuffer(sz int64) []int16 {
@@ -542,6 +532,13 @@ func (c *columnChunkReader) readDefinitionLevels(levels []int16) (totalDecoded i
 	return c.definitionDecoder.Decode(levels)
 }
 
+// countDefinitionLevels returns the total number of definition levels that were decoded,
+// and the number of values that are equal to the max definition level
+// (indicating how many physical values there are to read).
+func (c *columnChunkReader) countDefinitionLevels(size int) (totalDecoded int, valuesToRead int64, err error) {
+	return c.definitionDecoder.Count(c.descr.MaxDefinitionLevel(), size)
+}
+
 // readRepetitionLevels decodes the repetition levels from the page and returns
 // the total number of values decoded (and thus populated in the passed in levels
 // slice).
@@ -580,9 +577,10 @@ func (c *columnChunkReader) determineNumToRead(batchLen int64, defLvls, repLvls 
 
 	if c.descr.MaxDefinitionLevel() > 0 {
 		if defLvls == nil {
-			defLvls = c.getDefLvlBuffer(size)
+			ndefs, toRead, err = c.countDefinitionLevels(int(size))
+		} else {
+			ndefs, toRead, err = c.readDefinitionLevels(defLvls[:size])
 		}
-		ndefs, toRead, err = c.readDefinitionLevels(defLvls[:size])
 		if err != nil {
 			return
 		}
@@ -596,7 +594,7 @@ func (c *columnChunkReader) determineNumToRead(batchLen int64, defLvls, repLvls 
 			err = repErr
 			return
 		}
-		if defLvls != nil && ndefs != nreps {
+		if c.descr.MaxDefinitionLevel() > 0 && ndefs != nreps {
 			err = errors.New("parquet: number of decoded rep/def levels did not match")
 		}
 	}
@@ -698,8 +696,7 @@ func (c *columnChunkReader) skipRows(nrows int64) error {
 
 			var valuesToSkip int64
 			if c.descr.MaxDefinitionLevel() > 0 {
-				defLvls := c.getDefLvlBuffer(int64(levelsToSkip))
-				_, valuesToSkip, err = c.readDefinitionLevels(defLvls)
+				_, valuesToSkip, err = c.countDefinitionLevels(levelsToSkip)
 				if err != nil {
 					c.err = err
 					return err

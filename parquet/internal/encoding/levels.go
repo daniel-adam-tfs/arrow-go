@@ -278,3 +278,24 @@ func (l *LevelDecoder) Decode(levels []int16) (int, int64, error) {
 
 	return totaldecoded, valsToRead, nil
 }
+
+func (l *LevelDecoder) Count(maxDefLevel int16, size int) (int, int64, error) {
+	var (
+		totaldecoded int
+		maxCount     int64
+	)
+
+	var err error
+	n := min(l.remaining, size)
+	switch l.encoding {
+	case format.Encoding_RLE:
+		totaldecoded, maxCount, err = l.rle.Count(maxDefLevel, n)
+	case format.Encoding_BIT_PACKED:
+		totaldecoded, maxCount, err = l.bit.CountBatchLevels(uint(l.bitWidth), n, l.maxLvl)
+	}
+	if err != nil {
+		return totaldecoded, maxCount, err
+	}
+	l.remaining -= int(totaldecoded)
+	return totaldecoded, maxCount, nil
+}

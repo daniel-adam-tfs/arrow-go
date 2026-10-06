@@ -658,6 +658,65 @@ func (b *BitReader) GetBatchLevels(bits uint, out []int16, maxLevel int16) (int,
 	return i, maxCount, nil
 }
 
+// GetBatchLevels fills out with bit-packed levels and returns the number equal
+// to maxLevel.
+func (b *BitReader) CountBatchLevels(bits uint, size int, maxLevel int16) (int, int64, error) {
+	if bits > 16 {
+		return 0, 0, errors.New("must be 16 bits or less per read")
+	}
+	var maxCount int64
+	i := 0
+
+	for ; i < size && b.bitoffset != 0; i++ {
+		val, err := b.next(bits)
+		if err != nil {
+			return i, maxCount, err
+		}
+		level := int16(val)
+		if level == maxLevel {
+			maxCount++
+		}
+	}
+
+	if _, err := b.reader.Seek(b.byteoffset, io.SeekStart); err != nil {
+		return i, maxCount, err
+	}
+	for i < size {
+		unpackSize := utils.Min(buflen, size-i)
+		numUnpacked, err := unpack32(b.reader, b.unpackBuf[:unpackSize], int(bits))
+
+		for _, val := range b.unpackBuf[:numUnpacked] {
+			if int16(val) == maxLevel {
+				maxCount++
+			}
+		}
+		i += numUnpacked
+		b.byteoffset += int64(numUnpacked * int(bits) / 8)
+		if err != nil {
+			return i, maxCount, err
+		}
+		if numUnpacked == 0 {
+			break
+		}
+	}
+
+	if err := b.fillbuffer(); err != nil {
+		return i, maxCount, err
+	}
+	for ; i < size; i++ {
+		val, err := b.next(bits)
+		if err != nil {
+			return i, maxCount, err
+		}
+		level := int16(val)
+		if level == maxLevel {
+			maxCount++
+		}
+	}
+
+	return i, maxCount, nil
+}
+
 // GetBatchBitmap fills out with bit-packed boolean values without unpacking
 // them into a slice of integers. The input must be packed one bit per value.
 func (b *BitReader) GetBatchBitmap(out []byte, outOffset, length int) (int, error) {

@@ -905,35 +905,73 @@ func setupBenchmarkFiles() error {
 	}
 	// Create V1 file
 	v1File := filepath.Join(benchmarkTempDir, "rle-dict-int32.v1.parquet")
-	if err := createBenchmarkFile(v1File, numRowGroups, numRowsPerRowGroup, writerProps(parquet.DataPageV1, compress.Codecs.Uncompressed, nil)); err != nil {
+	if err := createBenchmarkInt32File(v1File, numRowGroups, numRowsPerRowGroup,
+		writerProps(parquet.DataPageV1, compress.Codecs.Uncompressed, nil)); err != nil {
 		return err
 	}
 	benchmarkFiles["v1"] = v1File
 
 	// Create V2 file
 	v2File := filepath.Join(benchmarkTempDir, "rle-dict-int32.v2.parquet")
-	if err := createBenchmarkFile(v2File, numRowGroups, numRowsPerRowGroup, writerProps(parquet.DataPageV2, compress.Codecs.Uncompressed, nil)); err != nil {
+	if err := createBenchmarkInt32File(v2File, numRowGroups, numRowsPerRowGroup,
+		writerProps(parquet.DataPageV2, compress.Codecs.Uncompressed, nil)); err != nil {
 		return err
 	}
 	benchmarkFiles["v2"] = v2File
 
 	// Create V1 Snappy file
 	v1SnappyFile := filepath.Join(benchmarkTempDir, "rle-dict-int32.v1.snappy.parquet")
-	if err = createBenchmarkFile(v1SnappyFile, numRowGroups, numRowsPerRowGroup, writerProps(parquet.DataPageV1, compress.Codecs.Snappy, nil)); err != nil {
+	if err = createBenchmarkInt32File(v1SnappyFile, numRowGroups, numRowsPerRowGroup,
+		writerProps(parquet.DataPageV1, compress.Codecs.Snappy, nil)); err != nil {
 		return err
 	}
 	benchmarkFiles["v1-snappy"] = v1SnappyFile
 
 	// Create V2 Snappy file
 	v2SnappyFile := filepath.Join(benchmarkTempDir, "rle-dict-int32.v2.snappy.parquet")
-	if err = createBenchmarkFile(v2SnappyFile, numRowGroups, numRowsPerRowGroup, writerProps(parquet.DataPageV2, compress.Codecs.Snappy, nil)); err != nil {
+	if err = createBenchmarkInt32File(v2SnappyFile, numRowGroups, numRowsPerRowGroup,
+		writerProps(parquet.DataPageV2, compress.Codecs.Snappy, nil)); err != nil {
 		return err
 	}
 	benchmarkFiles["v2-snappy"] = v2SnappyFile
+
+	/* List files */
+	// Create V1 List file
+	v1ListFile := filepath.Join(benchmarkTempDir, "rle-dict-int32.list.v1.parquet")
+	if err = createBenchmarkInt32ListFile(v1ListFile, numRowGroups, numRowsPerRowGroup, false,
+		writerProps(parquet.DataPageV1, compress.Codecs.Uncompressed, nil)); err != nil {
+		return err
+	}
+	benchmarkFiles["v1-list"] = v1ListFile
+
+	// Create V2 List file
+	v2ListFile := filepath.Join(benchmarkTempDir, "rle-dict-int32.list.v2.parquet")
+	if err = createBenchmarkInt32ListFile(v2ListFile, numRowGroups, numRowsPerRowGroup, false,
+		writerProps(parquet.DataPageV2, compress.Codecs.Uncompressed, nil)); err != nil {
+		return err
+	}
+	benchmarkFiles["v2-list"] = v2ListFile
+
+	// Create V1 List Snappy file
+	v1ListSnappyFile := filepath.Join(benchmarkTempDir, "rle-dict-int32.list.v1.snappy.parquet")
+	if err = createBenchmarkInt32ListFile(v1ListSnappyFile, numRowGroups, numRowsPerRowGroup, false,
+		writerProps(parquet.DataPageV1, compress.Codecs.Snappy, nil)); err != nil {
+		return err
+	}
+	benchmarkFiles["v1-list-snappy"] = v1ListSnappyFile
+
+	// Create V2 List Snappy file
+	v2ListSnappyFile := filepath.Join(benchmarkTempDir, "rle-dict-int32.list.v2.snappy.parquet")
+	if err = createBenchmarkInt32ListFile(v2ListSnappyFile, numRowGroups, numRowsPerRowGroup, false,
+		writerProps(parquet.DataPageV2, compress.Codecs.Snappy, nil)); err != nil {
+		return err
+	}
+	benchmarkFiles["v2-list-snappy"] = v2ListSnappyFile
+
 	return nil
 }
 
-func createBenchmarkFile(filepath string, numRowGroups, numRowsPerRowGroup int, props *parquet.WriterProperties) error {
+func createBenchmarkInt32File(filepath string, numRowGroups, numRowsPerRowGroup int, props *parquet.WriterProperties) error {
 	outFile, err := os.Create(filepath)
 	if err != nil {
 		return fmt.Errorf("failed to create benchmark file: %v", err)
@@ -951,11 +989,12 @@ func createBenchmarkFile(filepath string, numRowGroups, numRowsPerRowGroup int, 
 
 	// 10 row groups of 1_000_000 rows = 10_000_000 rows in total
 	value := int32(1)
+	valuesIn := make([]int32, 0, numRowsPerRowGroup)
 	for range numRowGroups {
+		valuesIn = valuesIn[:0]
 		rgWriter := writer.AppendBufferedRowGroup()
 		cwr, _ := rgWriter.Column(0)
 		cw := cwr.(*file.Int32ColumnChunkWriter)
-		valuesIn := make([]int32, 0, numRowsPerRowGroup)
 		repeats := 1
 		for len(valuesIn) < numRowsPerRowGroup {
 			repeatedValue := make([]int32, repeats)
@@ -975,6 +1014,84 @@ func createBenchmarkFile(filepath string, numRowGroups, numRowsPerRowGroup int, 
 	}
 	if err := writer.Close(); err != nil {
 		return fmt.Errorf("failed to close parquet writer: %v", err)
+	}
+	return nil
+}
+
+func createBenchmarkInt32ListFile(
+	filepath string,
+	numRowGroups, numValuesPerRowGroup int,
+	repeatValueInList bool,
+	props *parquet.WriterProperties,
+) error {
+	outFile, err := os.Create(filepath)
+	if err != nil {
+		return fmt.Errorf("failed to create benchmark file: %v", err)
+	}
+	defer outFile.Close()
+	fmt.Println("Creating benchmark Int32 list file at", filepath)
+
+	sc := schema.MustGroup(schema.NewGroupNode("schema", parquet.Repetitions.Required, schema.FieldList{
+		schema.Must(schema.ListOf(
+			schema.Must(schema.NewPrimitiveNode("col", parquet.Repetitions.Optional, parquet.Types.Int32, -1, -1)),
+			parquet.Repetitions.Optional, -1)),
+	}, -1))
+
+	writer := file.NewParquetWriter(outFile, sc, file.WithWriterProps(props))
+	defer writer.Close()
+
+	// each row has 1..20 repeated values
+	value := int32(1)
+	valuesIn := make([]int32, 0, numValuesPerRowGroup)
+	defLevels := make([]int16, 0, numValuesPerRowGroup)
+	repLevels := make([]int16, 0, numValuesPerRowGroup)
+	for range numRowGroups {
+		valuesIn = valuesIn[:0]
+		defLevels = defLevels[:0]
+		repLevels = repLevels[:0]
+		rgWriter := writer.AppendBufferedRowGroup()
+		cwr, err := rgWriter.Column(0)
+		if err != nil {
+			return fmt.Errorf("failed to get list column writer: %w", err)
+		}
+		cw := cwr.(*file.Int32ColumnChunkWriter)
+		listLength := 1
+		for len(valuesIn) < numValuesPerRowGroup {
+			listValues := make([]int32, listLength)
+			for i := range listValues {
+				listValues[i] = value
+				if !repeatValueInList {
+					value++
+				}
+			}
+			if len(valuesIn)+len(listValues) > numValuesPerRowGroup {
+				listValues = listValues[:numValuesPerRowGroup-len(valuesIn)]
+			}
+			valuesIn = append(valuesIn, listValues[:]...)
+			for i := 0; i < len(listValues); i++ {
+				if i == 0 {
+					repLevels = append(repLevels, 0)
+				} else {
+					repLevels = append(repLevels, 1)
+				}
+				defLevels = append(defLevels, cw.Descr().MaxDefinitionLevel())
+			}
+			// lists of length from 1 to 10
+			listLength = (listLength % 10) + 1
+			if !repeatValueInList {
+				value++
+			}
+		}
+		if _, err := cw.WriteBatch(valuesIn, defLevels, repLevels); err != nil {
+			return fmt.Errorf("failed to write list column: %w", err)
+		}
+		if err := rgWriter.Close(); err != nil {
+			return fmt.Errorf("failed to close list row group: %w", err)
+		}
+	}
+
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("failed to close parquet writer: %w", err)
 	}
 	return nil
 }
@@ -1015,6 +1132,62 @@ func benchmarkReadInt32Column(b *testing.B, filepath string, readProps *parquet.
 	}
 }
 
+func benchmarkReadInt32ListColumn(b *testing.B, filepath string, getDefLevels, getRepLevels bool, readProps *parquet.ReaderProperties) {
+	var reader *file.Reader
+	var err error
+
+	if readProps != nil {
+		reader, err = file.OpenParquetFile(filepath, false, file.WithReadProps(readProps))
+	} else {
+		reader, err = file.OpenParquetFile(filepath, false)
+	}
+	require.NoError(b, err)
+	defer reader.Close()
+
+	numRowGroups := int64(reader.NumRowGroups())
+	rgReader := reader.RowGroup(0)
+	colMetaData, err := rgReader.MetaData().ColumnChunk(0)
+	require.NoError(b, err)
+	numValuesPerRowGroup := colMetaData.NumValues()
+
+	for rg := 1; rg < reader.NumRowGroups(); rg++ {
+		rgReader := reader.RowGroup(rg)
+		colMetaData, err := rgReader.MetaData().ColumnChunk(0)
+		require.NoError(b, err)
+		require.Equal(b, numValuesPerRowGroup, colMetaData.NumValues())
+	}
+
+	values := make([]int32, numValuesPerRowGroup*numRowGroups)
+	var repLevels []int16
+	if getRepLevels {
+		repLevels = make([]int16, numValuesPerRowGroup)
+	}
+	var defLevels []int16
+	if getDefLevels {
+		defLevels = make([]int16, numValuesPerRowGroup)
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		startIndex := 0
+		for rg := 0; rg < reader.NumRowGroups(); rg++ {
+			rgReader := reader.RowGroup(rg)
+			colReader, err := rgReader.Column(0)
+			require.NoError(b, err)
+
+			cr, ok := colReader.(*file.Int32ColumnChunkReader)
+			require.True(b, ok)
+
+			_, valuesRead, err := cr.ReadBatch(numValuesPerRowGroup, values[startIndex:], defLevels, repLevels)
+			require.NoError(b, err)
+
+			startIndex += valuesRead
+			require.Equal(b, numValuesPerRowGroup, int64(valuesRead))
+		}
+		require.Equal(b, numValuesPerRowGroup*numRowGroups, int64(startIndex))
+	}
+}
+
 func BenchmarkReadInt32(b *testing.B) {
 	ensureBenchmarkFiles(b)
 
@@ -1048,5 +1221,73 @@ func BenchmarkReadInt32Buffered(b *testing.B) {
 	})
 	b.Run("V2PageSnappy", func(b *testing.B) {
 		benchmarkReadInt32Column(b, benchmarkFiles["v2-snappy"], readProps)
+	})
+}
+
+func BenchmarkReadInt32ListColumn(b *testing.B) {
+	ensureBenchmarkFiles(b)
+
+	b.Run("V1Page", func(b *testing.B) {
+		benchmarkReadInt32ListColumn(b, benchmarkFiles["v1-list"], false, false, nil)
+	})
+	b.Run("V2Page", func(b *testing.B) {
+		benchmarkReadInt32ListColumn(b, benchmarkFiles["v2-list"], false, false, nil)
+	})
+	b.Run("V1PageSnappy", func(b *testing.B) {
+		benchmarkReadInt32ListColumn(b, benchmarkFiles["v1-list-snappy"], false, false, nil)
+	})
+	b.Run("V2PageSnappy", func(b *testing.B) {
+		benchmarkReadInt32ListColumn(b, benchmarkFiles["v2-list-snappy"], false, false, nil)
+	})
+}
+
+func BenchmarkReadInt32ListColumnWithLevels(b *testing.B) {
+	ensureBenchmarkFiles(b)
+
+	b.Run("V1Page", func(b *testing.B) {
+		benchmarkReadInt32ListColumn(b, benchmarkFiles["v1-list"], true, true, nil)
+	})
+	b.Run("V2Page", func(b *testing.B) {
+		benchmarkReadInt32ListColumn(b, benchmarkFiles["v2-list"], true, true, nil)
+	})
+	b.Run("V1PageSnappy", func(b *testing.B) {
+		benchmarkReadInt32ListColumn(b, benchmarkFiles["v1-list-snappy"], true, true, nil)
+	})
+	b.Run("V2PageSnappy", func(b *testing.B) {
+		benchmarkReadInt32ListColumn(b, benchmarkFiles["v2-list-snappy"], true, true, nil)
+	})
+}
+
+func BenchmarkReadInt32ListColumnWithDefLevelsOnly(b *testing.B) {
+	ensureBenchmarkFiles(b)
+
+	b.Run("V1Page", func(b *testing.B) {
+		benchmarkReadInt32ListColumn(b, benchmarkFiles["v1-list"], true, false, nil)
+	})
+	b.Run("V2Page", func(b *testing.B) {
+		benchmarkReadInt32ListColumn(b, benchmarkFiles["v2-list"], true, false, nil)
+	})
+	b.Run("V1PageSnappy", func(b *testing.B) {
+		benchmarkReadInt32ListColumn(b, benchmarkFiles["v1-list-snappy"], true, false, nil)
+	})
+	b.Run("V2PageSnappy", func(b *testing.B) {
+		benchmarkReadInt32ListColumn(b, benchmarkFiles["v2-list-snappy"], true, false, nil)
+	})
+}
+
+func BenchmarkReadInt32ListColumnWithRepLevelsOnly(b *testing.B) {
+	ensureBenchmarkFiles(b)
+
+	b.Run("V1Page", func(b *testing.B) {
+		benchmarkReadInt32ListColumn(b, benchmarkFiles["v1-list"], false, true, nil)
+	})
+	b.Run("V2Page", func(b *testing.B) {
+		benchmarkReadInt32ListColumn(b, benchmarkFiles["v2-list"], false, true, nil)
+	})
+	b.Run("V1PageSnappy", func(b *testing.B) {
+		benchmarkReadInt32ListColumn(b, benchmarkFiles["v1-list-snappy"], false, true, nil)
+	})
+	b.Run("V2PageSnappy", func(b *testing.B) {
+		benchmarkReadInt32ListColumn(b, benchmarkFiles["v2-list-snappy"], false, true, nil)
 	})
 }
